@@ -2,8 +2,6 @@
 
 A geometric space shooter game with full sound implementation.
 
-![Shape Invaders Screenshot]
-
 ## Description
 
 Shape Invaders is a modern take on the classic space invaders concept, using geometric shapes instead of pixel art sprites. The game features a player-controlled ship (triangle) that moves horizontally at the bottom of the screen, facing waves of geometric enemies with different behaviors and abilities.
