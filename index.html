@@ -1,0 +1,2319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shape Invaders</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚀</text></svg>">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            height: 600px;
+        }
+        canvas {
+            display: block;
+            margin: 0 auto;
+            willReadFrequently: true;
+        }
+        #debug-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            max-width: 300px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 12px;
+            display: none;
+            z-index: 1000;
+        }
+        #fps-counter {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 5px;
+            border-radius: 3px;
+            font-size: 12px;
+            display: none;
+            z-index: 1000;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
+</head>
+<body>
+    <div id="game-container">
+        <div id="debug-panel"></div>
+        <div id="fps-counter">FPS: 0</div>
+    </div>
+
+    <script>
+        // Debug utilities
+        const DEBUG = {
+            enabled: false,
+            panel: null,
+            fpsCounter: null,
+            logs: [],
+            maxLogs: 20,
+            showColliders: false,
+            showStats: false,
+            colliderGraphics: null,
+            statsPanel: null,
+            
+            init() {
+                this.panel = document.getElementById('debug-panel');
+                this.fpsCounter = document.getElementById('fps-counter');
+                
+                // Create stats panel
+                this.statsPanel = document.createElement('div');
+                this.statsPanel.id = 'stats-panel';
+                this.statsPanel.style.position = 'absolute';
+                this.statsPanel.style.bottom = '10px';
+                this.statsPanel.style.right = '10px';
+                this.statsPanel.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+                this.statsPanel.style.padding = '10px';
+                this.statsPanel.style.borderRadius = '5px';
+                this.statsPanel.style.fontSize = '12px';
+                this.statsPanel.style.display = 'none';
+                this.statsPanel.style.zIndex = '1000';
+                document.getElementById('game-container').appendChild(this.statsPanel);
+                
+                // Override console.log
+                const originalLog = console.log;
+                console.log = (...args) => {
+                    originalLog.apply(console, args);
+                    this.addLog(args.join(' '));
+                };
+                
+                // Override console.error
+                const originalError = console.error;
+                console.error = (...args) => {
+                    originalError.apply(console, args);
+                    this.addLog('ERROR: ' + args.join(' '), 'error');
+                };
+                
+                // Add keyboard shortcuts
+                document.addEventListener('keydown', (e) => {
+                    // Toggle debug panel with backtick key
+                    if (e.key === '`') {
+                        this.toggle();
+                    }
+                    
+                    // Only process other debug keys if debug mode is enabled
+                    if (this.enabled) {
+                        // Toggle collision boxes with 'c' key
+                        if (e.key === 'c') {
+                            this.toggleColliders();
+                        }
+                        
+                        // Toggle stats panel with 's' key
+                        if (e.key === 's') {
+                            this.toggleStats();
+                        }
+                        
+                        // Clear logs with 'l' key
+                        if (e.key === 'l') {
+                            this.clearLogs();
+                        }
+                    }
+                });
+                
+                console.log('Debug utilities initialized. Press ` to toggle debug mode.');
+            },
+            
+            toggle() {
+                this.enabled = !this.enabled;
+                this.panel.style.display = this.enabled ? 'block' : 'none';
+                this.fpsCounter.style.display = this.enabled ? 'block' : 'none';
+                
+                // Reset other debug features when toggling off
+                if (!this.enabled) {
+                    this.showColliders = false;
+                    this.showStats = false;
+                    this.statsPanel.style.display = 'none';
+                    if (this.colliderGraphics) {
+                        this.colliderGraphics.clear();
+                    }
+                }
+                
+                console.log('Debug mode ' + (this.enabled ? 'enabled' : 'disabled'));
+            },
+            
+            toggleColliders() {
+                this.showColliders = !this.showColliders;
+                console.log('Collision boxes ' + (this.showColliders ? 'visible' : 'hidden'));
+                
+                if (!this.showColliders && this.colliderGraphics) {
+                    this.colliderGraphics.clear();
+                }
+            },
+            
+            toggleStats() {
+                this.showStats = !this.showStats;
+                this.statsPanel.style.display = this.showStats ? 'block' : 'none';
+                console.log('Stats panel ' + (this.showStats ? 'visible' : 'hidden'));
+            },
+            
+            clearLogs() {
+                this.logs = [];
+                this.updatePanel();
+                console.log('Debug logs cleared');
+            },
+            
+            updateStats() {
+                if (!this.showStats || !this.statsPanel) return;
+                
+                // Gather game statistics
+                const stats = {
+                    'Player': player ? `Health: ${player.health}/${player.maxHealth}` : 'N/A',
+                    'Enemies': enemies.length,
+                    'Projectiles': projectiles.length,
+                    'Particles': particles.length,
+                    'Wave': wave,
+                    'Score': score,
+                    'Lives': lives,
+                    'Missiles': missiles + '/' + MAX_MISSILES,
+                    'Memory': Math.round(performance.memory?.usedJSHeapSize / 1048576) + 'MB' || 'N/A'
+                };
+                
+                // Update stats panel
+                this.statsPanel.innerHTML = '';
+                Object.entries(stats).forEach(([key, value]) => {
+                    const statElement = document.createElement('div');
+                    statElement.textContent = `${key}: ${value}`;
+                    this.statsPanel.appendChild(statElement);
+                });
+            },
+            
+            drawColliders() {
+                if (!this.showColliders || !game || !game.scene || !game.scene.scenes[0]) return;
+                
+                // Create graphics object if it doesn't exist
+                if (!this.colliderGraphics) {
+                    this.colliderGraphics = game.scene.scenes[0].add.graphics({ willReadFrequently: true });
+                }
+                
+                // Clear previous drawings
+                this.colliderGraphics.clear();
+                
+                // Draw player collider
+                if (player) {
+                    this.colliderGraphics.lineStyle(1, 0x00ff00, 1);
+                    this.colliderGraphics.strokeRect(
+                        player.x - player.width / 2,
+                        player.y - player.height / 2,
+                        player.width,
+                        player.height
+                    );
+                }
+                
+                // Draw enemy colliders
+                this.colliderGraphics.lineStyle(1, 0xff0000, 1);
+                enemies.forEach(enemy => {
+                    if (enemy.active) {
+                        this.colliderGraphics.strokeRect(
+                            enemy.x - enemy.width / 2,
+                            enemy.y - enemy.height / 2,
+                            enemy.width,
+                            enemy.height
+                        );
+                    }
+                });
+                
+                // Draw projectile colliders
+                this.colliderGraphics.lineStyle(1, 0x00ffff, 1);
+                projectiles.forEach(projectile => {
+                    if (projectile.active) {
+                        if (projectile.isMissile) {
+                            // Draw missile explosion radius
+                            this.colliderGraphics.lineStyle(1, 0xff8800, 0.5);
+                            this.colliderGraphics.strokeCircle(
+                                projectile.x,
+                                projectile.y,
+                                explosionRadius
+                            );
+                        }
+                        
+                        this.colliderGraphics.lineStyle(1, 0x00ffff, 1);
+                        this.colliderGraphics.strokeRect(
+                            projectile.x - projectile.width / 2,
+                            projectile.y - projectile.height / 2,
+                            projectile.width,
+                            projectile.height
+                        );
+                    }
+                });
+            },
+            
+            addLog(message, type = 'info') {
+                if (this.logs.length >= this.maxLogs) {
+                    this.logs.shift();
+                }
+                
+                this.logs.push({ message, type, timestamp: new Date().toLocaleTimeString() });
+                this.updatePanel();
+            },
+            
+            updatePanel() {
+                if (!this.panel) return;
+                
+                this.panel.innerHTML = '';
+                this.logs.forEach(log => {
+                    const logElement = document.createElement('div');
+                    logElement.textContent = `[${log.timestamp}] ${log.message}`;
+                    logElement.style.color = log.type === 'error' ? '#ff5555' : '#ffffff';
+                    this.panel.appendChild(logElement);
+                });
+                
+                // Auto-scroll to bottom
+                this.panel.scrollTop = this.panel.scrollHeight;
+            },
+            
+            updateFPS(fps) {
+                if (!this.fpsCounter) return;
+                this.fpsCounter.textContent = `FPS: ${Math.round(fps)}`;
+            }
+        };
+
+        // Initialize debug utilities
+        DEBUG.init();
+
+        // Game configuration
+        const config = {
+            type: Phaser.CANVAS, // Explicitly use Canvas renderer
+            width: 800,
+            height: 600,
+            parent: 'game-container',
+            backgroundColor: '#000000',
+            pixelArt: true,
+            antialias: false,
+            roundPixels: true,
+            physics: {
+                default: 'arcade',
+                arcade: {
+                    gravity: { y: 0 },
+                    debug: false
+                }
+            },
+            // Simplified scene setup
+            scene: {
+                preload: preload,
+                create: create,
+                update: update
+            },
+            // Remove callbacks and other complex settings that might be causing issues
+            canvasStyle: 'display: block; margin: 0 auto;'
+        };
+
+        // Game variables
+        let player;
+        let enemies = [];
+        let projectiles = [];
+        let particles = [];
+        let powerUps = [];
+        let stars = [];
+        let score = 0;
+        let wave = 1;
+        let lives = 3;
+        let missiles = 3;
+        const MAX_MISSILES = 6;
+        let gameStarted = false;
+        let gameOver = false;
+        let waveText;
+        let scoreText;
+        let livesText;
+        let missilesText;
+        let titleText;
+        let startButton;
+        let explosionRadius = 100; // Missile explosion radius
+        let gameOverText;
+        let restartButton;
+        let lastTime = 0;
+        let deltaTime = 0;
+        let fps = 0;
+        let fpsUpdateTime = 0;
+        let mouseX = 0;
+        let mouseY = 0;
+        let mouseDown = false;
+        let rightMouseDown = false;
+        let enemySpawnTimer = 0;
+        let enemiesInWave = 0;
+        let waveCompleted = false;
+        let waveDelay = 3000;
+        let waveDelayTimer = 0;
+        let playerInvulnerable = false;
+        let playerInvulnerabilityTimer = 0;
+        let playerBlinkTimer = 0;
+        let playerVisible = true;
+        let capturedShip = null;
+        let tractor = null;
+
+        // Game
+        let game;
+
+        // Wait for DOM to be ready before creating game
+        window.onload = function() {
+            try {
+                // Create game instance
+                game = new Phaser.Game(config);
+                console.log('Game initialized successfully!');
+            } catch (error) {
+                console.error('Error initializing game:', error);
+            }
+        };
+
+        // Safely set willReadFrequently on a canvas context
+        function safelySetWillReadFrequently(context) {
+            try {
+                if (context && typeof context === 'object') {
+                    context.willReadFrequently = true;
+                    console.log('Successfully set willReadFrequently on context');
+                }
+            } catch (error) {
+                console.error('Error setting willReadFrequently:', error);
+            }
+        }
+        
+        // Apply willReadFrequently to all canvas elements
+        function applyWillReadFrequentlyToAllCanvases() {
+            try {
+                console.log('Applying willReadFrequently to all canvases');
+                // Get all canvas elements
+                const canvases = document.getElementsByTagName('canvas');
+                for (let i = 0; i < canvases.length; i++) {
+                    const canvas = canvases[i];
+                    if (canvas && canvas.getContext) {
+                        try {
+                            // Create context with willReadFrequently option
+                            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                            if (ctx) {
+                                ctx.willReadFrequently = true;
+                                console.log(`Set willReadFrequently on canvas ${i}`);
+                            }
+                        } catch (e) {
+                            console.error(`Error setting willReadFrequently on canvas ${i}:`, e);
+                        }
+                    }
+                }
+                
+                // Also try to patch the CanvasRenderingContext2D prototype
+                try {
+                    const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+                    CanvasRenderingContext2D.prototype.getImageData = function() {
+                        this.willReadFrequently = true;
+                        return originalGetImageData.apply(this, arguments);
+                    };
+                    console.log('Patched CanvasRenderingContext2D.prototype.getImageData');
+                } catch (e) {
+                    console.error('Error patching CanvasRenderingContext2D prototype:', e);
+                }
+            } catch (error) {
+                console.error('Error applying willReadFrequently to canvases:', error);
+            }
+        }
+
+        // Preload assets
+        function preload() {
+            console.log('Preloading assets...');
+            
+            try {
+                // Create loading text
+                const loadingText = this.add.text(
+                    this.cameras.main.width / 2,
+                    this.cameras.main.height / 2,
+                    'Loading...',
+                    {
+                        font: '24px Arial',
+                        fill: '#ffffff'
+                    }
+                ).setOrigin(0.5);
+                
+                // Create a loading bar
+                const progressBar = this.add.graphics();
+                const progressBox = this.add.graphics();
+                progressBox.fillStyle(0x222222, 0.8);
+                progressBox.fillRect(
+                    this.cameras.main.width / 2 - 160,
+                    this.cameras.main.height / 2 + 30,
+                    320,
+                    50
+                );
+                
+                // Loading progress events
+                this.load.on('progress', function (value) {
+                    progressBar.clear();
+                    progressBar.fillStyle(0xffffff, 1);
+                    progressBar.fillRect(
+                        game.config.width / 2 - 150,
+                        game.config.height / 2 + 40,
+                        300 * value,
+                        30
+                    );
+                });
+                
+                this.load.on('complete', function () {
+                    progressBar.destroy();
+                    progressBox.destroy();
+                    loadingText.destroy();
+                    
+                    // Apply willReadFrequently to all canvases after loading is complete
+                    applyWillReadFrequentlyToAllCanvases();
+                });
+                
+                // Set willReadFrequently on canvas contexts if available
+                if (this.sys && this.sys.game && this.sys.game.canvas) {
+                    const canvas = this.sys.game.canvas;
+                    if (canvas.getContext) {
+                        try {
+                            // Try with options first
+                            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                            if (ctx) {
+                                safelySetWillReadFrequently(ctx);
+                            }
+                        } catch (e) {
+                            // Fallback if options not supported
+                            const ctx = canvas.getContext('2d');
+                            if (ctx) {
+                                safelySetWillReadFrequently(ctx);
+                            }
+                        }
+                    }
+                }
+                
+                // Also try to set on any existing canvas elements
+                applyWillReadFrequentlyToAllCanvases();
+            } catch (error) {
+                console.error('Error in preload:', error);
+            }
+        }
+
+        // Create game objects
+        function create() {
+            console.log('Creating game objects...');
+            
+            try {
+                // Store scene reference
+                this.gameScene = this;
+                
+                // Apply willReadFrequently to all canvases at create time
+                applyWillReadFrequentlyToAllCanvases();
+                
+                // Create starfield background
+                createStarfield(this);
+                
+                // Create title screen
+                createTitleScreen(this);
+                
+                // Set up input handlers
+                setupInputHandlers(this);
+                
+                // Set up a delayed check to ensure willReadFrequently is applied after all graphics are created
+                this.time.delayedCall(500, function() {
+                    applyWillReadFrequentlyToAllCanvases();
+                }, [], this);
+                
+                console.log('Game objects created successfully!');
+            } catch (error) {
+                console.error('Error in create:', error);
+            }
+        }
+
+        // Update game state
+        function update(time, delta) {
+            try {
+                // Calculate delta time in seconds
+                const currentTime = time;
+                deltaTime = (currentTime - lastTime) / 1000;
+                lastTime = currentTime;
+                
+                // Update FPS counter every 500ms
+                fpsUpdateTime += delta;
+                if (fpsUpdateTime >= 500) {
+                    fps = 1000 / delta;
+                    DEBUG.updateFPS(fps);
+                    fpsUpdateTime = 0;
+                }
+                
+                // Update mouse position
+                const pointer = this.input.activePointer;
+                mouseX = pointer.x;
+                mouseY = pointer.y;
+                
+                // Update debug features if enabled
+                if (DEBUG.enabled) {
+                    if (DEBUG.showColliders) {
+                        DEBUG.drawColliders();
+                    }
+                    
+                    if (DEBUG.showStats) {
+                        DEBUG.updateStats();
+                    }
+                }
+                
+                // Update game state based on current mode
+                if (!gameStarted) {
+                    // Title screen updates
+                    updateStars(deltaTime);
+                } else if (!gameOver) {
+                    // Game updates
+                    updateGame(this, deltaTime);
+                }
+            } catch (error) {
+                console.error('Error in update:', error);
+            }
+        }
+
+        // Create starfield background
+        function createStarfield(scene) {
+            try {
+                // Create stars with different sizes and speeds
+                for (let i = 0; i < 100; i++) {
+                    const x = Math.random() * scene.cameras.main.width;
+                    const y = Math.random() * scene.cameras.main.height;
+                    const size = Math.random() * 2 + 1;
+                    const speed = Math.random() * 30 + 10;
+                    
+                    stars.push({
+                        x,
+                        y,
+                        size,
+                        speed,
+                        graphics: scene.add.graphics()
+                    });
+                    
+                    // Draw initial star
+                    stars[i].graphics.fillStyle(0xffffff, Math.random() * 0.5 + 0.5);
+                    stars[i].graphics.fillCircle(x, y, size);
+                }
+            } catch (error) {
+                console.error('Error creating starfield:', error);
+            }
+        }
+
+        // Update stars animation
+        function updateStars(deltaTime) {
+            try {
+                stars.forEach(star => {
+                    // Move star down
+                    star.y += star.speed * deltaTime;
+                    
+                    // Wrap around if star goes off screen
+                    if (star.y > game.config.height) {
+                        star.y = 0;
+                        star.x = Math.random() * game.config.width;
+                    }
+                    
+                    // Update star position
+                    star.graphics.clear();
+                    star.graphics.fillStyle(0xffffff, Math.random() * 0.5 + 0.5);
+                    star.graphics.fillCircle(star.x, star.y, star.size);
+                });
+            } catch (error) {
+                console.error('Error updating stars:', error);
+            }
+        }
+
+        // Create title screen
+        function createTitleScreen(scene) {
+            console.log('Creating title screen...');
+            
+            try {
+                // Title text
+                titleText = scene.add.text(
+                    scene.cameras.main.width / 2,
+                    scene.cameras.main.height / 3,
+                    'SHAPE INVADERS',
+                    {
+                        font: 'bold 48px Arial',
+                        fill: '#ffffff'
+                    }
+                ).setOrigin(0.5);
+                
+                // Create start button with background
+                const buttonWidth = 200;
+                const buttonHeight = 60;
+                const buttonX = scene.cameras.main.width / 2 - buttonWidth / 2;
+                const buttonY = scene.cameras.main.height / 2 + 50;
+                
+                // Button background
+                const buttonBackground = scene.add.graphics();
+                buttonBackground.fillStyle(0x333333, 1);
+                buttonBackground.fillRect(buttonX, buttonY, buttonWidth, buttonHeight);
+                buttonBackground.lineStyle(2, 0xffffff, 1);
+                buttonBackground.strokeRect(buttonX, buttonY, buttonWidth, buttonHeight);
+                
+                // Button text
+                const startText = scene.add.text(
+                    scene.cameras.main.width / 2,
+                    scene.cameras.main.height / 2 + 50 + buttonHeight / 2,
+                    'START GAME',
+                    {
+                        font: 'bold 24px Arial',
+                        fill: '#ffffff'
+                    }
+                ).setOrigin(0.5);
+                
+                // Make button interactive
+                buttonBackground.setInteractive(
+                    new Phaser.Geom.Rectangle(buttonX, buttonY, buttonWidth, buttonHeight),
+                    Phaser.Geom.Rectangle.Contains
+                );
+                
+                // Button click handler
+                buttonBackground.on('pointerdown', function() {
+                    console.log('Start button clicked, starting GameScene');
+                    startGame(scene);
+                });
+                
+                // Store button reference
+                startButton = {
+                    background: buttonBackground,
+                    text: startText,
+                    x: buttonX,
+                    y: buttonY,
+                    width: buttonWidth,
+                    height: buttonHeight
+                };
+                
+                // Add global click handler as fallback
+                scene.input.on('pointerdown', function(pointer) {
+                    if (!gameStarted) {
+                        // Check if click is within button bounds
+                        if (
+                            pointer.x >= startButton.x &&
+                            pointer.x <= startButton.x + startButton.width &&
+                            pointer.y >= startButton.y &&
+                            pointer.y <= startButton.y + startButton.height
+                        ) {
+                            console.log('Clicked within button bounds, starting GameScene');
+                            startGame(scene);
+                        }
+                    }
+                });
+                
+                console.log('TitleScene created');
+            } catch (error) {
+                console.error('Error creating title screen:', error);
+            }
+        }
+
+        // Start the game
+        function startGame(scene) {
+            try {
+                console.log('Starting GameScene from TitleScene');
+                
+                // Hide title elements
+                titleText.visible = false;
+                startButton.background.visible = false;
+                startButton.text.visible = false;
+                
+                // Reset game state
+                score = 0;
+                wave = 1;
+                lives = 3;
+                missiles = 3;
+                gameStarted = true;
+                gameOver = false;
+                
+                // Create game elements
+                createGameElements(scene);
+                
+                console.log('GameScene created');
+            } catch (error) {
+                console.error('Error starting game:', error);
+            }
+        }
+
+        // Create game elements
+        function createGameElements(scene) {
+            try {
+                // Create player
+                createPlayer(scene);
+                
+                // Create UI elements
+                createUI(scene);
+                
+                // Start first wave
+                startWave(scene);
+            } catch (error) {
+                console.error('Error creating game elements:', error);
+            }
+        }
+
+        // Create player
+        function createPlayer(scene) {
+            try {
+                console.log('Creating player...');
+                
+                // Create player object
+                player = new Player(scene, game.config.width / 2, game.config.height - 50);
+                
+                console.log('Player created successfully');
+            } catch (error) {
+                console.error('Error creating player:', error);
+            }
+        }
+
+        // Player class
+        class Player {
+            constructor(scene, x, y) {
+                try {
+                    this.scene = scene;
+                    this.x = x;
+                    this.y = y;
+                    this.width = 30;
+                    this.height = 30;
+                    this.speed = 300;
+                    this.targetX = x;
+                    this.shape = 'triangle'; // triangle, square, circle
+                    this.color = 0x00ff00;
+                    this.graphics = scene.add.graphics({ willReadFrequently: true });
+                    this.fireRate = 0.2;
+                    this.fireTimer = 0;
+                    this.health = 100;
+                    this.maxHealth = 100;
+                    this.invulnerable = false;
+                    this.dual = false;
+                    this.dualOffset = 15;
+                    
+                    // Initialize graphics
+                    this.drawShape();
+                    
+                    console.log('Player initialized');
+                } catch (error) {
+                    console.error('Error initializing player:', error);
+                }
+            }
+            
+            update(deltaTime) {
+                try {
+                    // Move towards target X position with smooth acceleration
+                    const dx = this.targetX - this.x;
+                    this.x += dx * Math.min(deltaTime * 10, 1);
+                    
+                    // Keep player within screen bounds
+                    this.x = Phaser.Math.Clamp(this.x, this.width / 2, game.config.width - this.width / 2);
+                    
+                    // Update fire timer
+                    if (this.fireTimer > 0) {
+                        this.fireTimer -= deltaTime;
+                    }
+                    
+                    // Fire if mouse is down and timer allows
+                    if (mouseDown && this.fireTimer <= 0) {
+                        this.fire();
+                        this.fireTimer = this.fireRate;
+                    }
+                    
+                    // Update graphics
+                    this.drawShape();
+                    
+                    // Handle invulnerability blinking
+                    if (playerInvulnerable) {
+                        playerBlinkTimer -= deltaTime;
+                        if (playerBlinkTimer <= 0) {
+                            playerBlinkTimer = 0.1;
+                            playerVisible = !playerVisible;
+                            this.graphics.visible = playerVisible;
+                        }
+                    } else {
+                        this.graphics.visible = true;
+                    }
+                } catch (error) {
+                    console.error('Error updating player:', error);
+                }
+            }
+            
+            drawShape() {
+                try {
+                    // Clear previous graphics
+                    if (this.graphics) {
+                        this.graphics.clear();
+                    }
+                    
+                    // Set fill style
+                    this.graphics.fillStyle(this.color, 1);
+                    
+                    // Draw shape based on current type
+                    if (this.shape === 'triangle') {
+                        // Draw triangle
+                        this.graphics.fillTriangle(
+                            this.x, this.y - this.height / 2,
+                            this.x - this.width / 2, this.y + this.height / 2,
+                            this.x + this.width / 2, this.y + this.height / 2
+                        );
+                        
+                        // Draw dual ship if active
+                        if (this.dual) {
+                            this.graphics.fillTriangle(
+                                this.x - this.dualOffset, this.y - this.height / 2,
+                                this.x - this.dualOffset - this.width / 2, this.y + this.height / 2,
+                                this.x - this.dualOffset + this.width / 2, this.y + this.height / 2
+                            );
+                        }
+                    } else if (this.shape === 'square') {
+                        // Draw square
+                        this.graphics.fillRect(
+                            this.x - this.width / 2,
+                            this.y - this.height / 2,
+                            this.width,
+                            this.height
+                        );
+                        
+                        // Draw dual ship if active
+                        if (this.dual) {
+                            this.graphics.fillRect(
+                                this.x - this.dualOffset - this.width / 2,
+                                this.y - this.height / 2,
+                                this.width,
+                                this.height
+                            );
+                        }
+                    } else if (this.shape === 'circle') {
+                        // Draw circle
+                        this.graphics.fillCircle(
+                            this.x,
+                            this.y,
+                            this.width / 2
+                        );
+                        
+                        // Draw dual ship if active
+                        if (this.dual) {
+                            this.graphics.fillCircle(
+                                this.x - this.dualOffset,
+                                this.y,
+                                this.width / 2
+                            );
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error drawing player shape:', error);
+                }
+            }
+            
+            fire() {
+                try {
+                    // Create projectile
+                    const projectile = new Projectile(
+                        this.scene,
+                        this.x,
+                        this.y - this.height / 2,
+                        0,
+                        -500,
+                        this.shape,
+                        0x00ffff,
+                        false
+                    );
+                    
+                    projectiles.push(projectile);
+                    
+                    // Fire from dual ship if active
+                    if (this.dual) {
+                        const dualProjectile = new Projectile(
+                            this.scene,
+                            this.x - this.dualOffset,
+                            this.y - this.height / 2,
+                            0,
+                            -500,
+                            this.shape,
+                            0x00ffff,
+                            false
+                        );
+                        
+                        projectiles.push(dualProjectile);
+                    }
+                } catch (error) {
+                    console.error('Error firing projectile:', error);
+                }
+            }
+            
+            fireMissile() {
+                try {
+                    if (missiles > 0) {
+                        // Create missile projectile
+                        const missile = new Projectile(
+                            this.scene,
+                            this.x,
+                            this.y - this.height / 2,
+                            0,
+                            -300,
+                            'circle',
+                            0xff0000,
+                            true
+                        );
+                        
+                        projectiles.push(missile);
+                        
+                        // Decrease missile count
+                        missiles--;
+                        updateMissilesText();
+                    }
+                } catch (error) {
+                    console.error('Error firing missile:', error);
+                }
+            }
+            
+            takeDamage(amount) {
+                try {
+                    if (playerInvulnerable) return;
+                    
+                    // Reduce health
+                    this.health -= amount;
+                    
+                    // Check if player is destroyed
+                    if (this.health <= 0) {
+                        this.die();
+                    } else {
+                        // Make player temporarily invulnerable
+                        playerInvulnerable = true;
+                        playerInvulnerabilityTimer = 2;
+                    }
+                } catch (error) {
+                    console.error('Error in player.takeDamage:', error);
+                }
+            }
+            
+            die() {
+                try {
+                    // Create explosion
+                    createExplosion(this.x, this.y, 0xffff00, 2);
+                    
+                    // Reduce lives
+                    lives--;
+                    updateLivesText();
+                    
+                    // Check if game over
+                    if (lives <= 0) {
+                        endGame();
+                    } else {
+                        // Reset player
+                        this.health = this.maxHealth;
+                        this.x = game.config.width / 2;
+                        this.targetX = this.x;
+                        
+                        // Make player temporarily invulnerable
+                        playerInvulnerable = true;
+                        playerInvulnerabilityTimer = 3;
+                    }
+                } catch (error) {
+                    console.error('Error in player.die:', error);
+                }
+            }
+        }
+
+        // Projectile class
+        class Projectile {
+            constructor(scene, x, y, vx, vy, shape, color, isMissile) {
+                try {
+                    this.scene = scene;
+                    this.x = x;
+                    this.y = y;
+                    this.vx = vx;
+                    this.vy = vy;
+                    this.shape = shape;
+                    this.color = color;
+                    this.isMissile = isMissile;
+                    this.width = isMissile ? 8 : 5;
+                    this.height = isMissile ? 15 : 10;
+                    this.graphics = scene.add.graphics({ willReadFrequently: true });
+                    this.active = true;
+                    this.trailPoints = []; // Initialize as empty array
+                    this.trailMaxLength = isMissile ? 10 : 5;
+                    this.damage = isMissile ? 100 : 20;
+                    
+                    // Draw initial shape
+                    this.drawShape();
+                } catch (error) {
+                    console.error('Error initializing projectile:', error);
+                }
+            }
+            
+            update(deltaTime) {
+                try {
+                    // Move projectile
+                    this.x += this.vx * deltaTime;
+                    this.y += this.vy * deltaTime;
+                    
+                    // Add current position to trail
+                    if (this.isMissile) {
+                        this.trailPoints.push({ x: this.x, y: this.y });
+                        
+                        // Limit trail length
+                        if (this.trailPoints.length > this.trailMaxLength) {
+                            this.trailPoints.shift();
+                        }
+                    }
+                    
+                    // Check if projectile is off screen
+                    if (
+                        this.x < 0 ||
+                        this.x > game.config.width ||
+                        this.y < 0 ||
+                        this.y > game.config.height
+                    ) {
+                        this.die();
+                        return;
+                    }
+                    
+                    // Update graphics
+                    this.drawShape();
+                } catch (error) {
+                    console.error('Error updating projectile:', error);
+                }
+            }
+            
+            drawShape() {
+                try {
+                    // Clear previous graphics
+                    if (this.graphics) {
+                        this.graphics.clear();
+                    }
+                    
+                    // Draw missile trail if applicable
+                    if (this.isMissile && this.trailPoints && this.trailPoints.length > 0) {
+                        for (let i = 0; i < this.trailPoints.length; i++) {
+                            const point = this.trailPoints[i];
+                            const alpha = i / this.trailPoints.length;
+                            this.graphics.fillStyle(0xff8800, alpha);
+                            this.graphics.fillCircle(point.x, point.y, this.width * alpha);
+                        }
+                    }
+                    
+                    // Set fill style
+                    this.graphics.fillStyle(this.color, 1);
+                    
+                    // Draw shape based on type
+                    if (this.shape === 'triangle') {
+                        // Draw triangle
+                        this.graphics.fillTriangle(
+                            this.x, this.y - this.height / 2,
+                            this.x - this.width / 2, this.y + this.height / 2,
+                            this.x + this.width / 2, this.y + this.height / 2
+                        );
+                    } else if (this.shape === 'square') {
+                        // Draw square
+                        this.graphics.fillRect(
+                            this.x - this.width / 2,
+                            this.y - this.height / 2,
+                            this.width,
+                            this.height
+                        );
+                    } else if (this.shape === 'circle') {
+                        // Draw circle
+                        this.graphics.fillCircle(
+                            this.x,
+                            this.y,
+                            this.width / 2
+                        );
+                    }
+                } catch (error) {
+                    console.error('Error drawing projectile shape:', error);
+                }
+            }
+            
+            die() {
+                try {
+                    // Remove from active projectiles
+                    this.active = false;
+                    
+                    // Destroy graphics
+                    if (this.graphics) {
+                        this.graphics.destroy();
+                    }
+                    
+                    // Create explosion if it's a missile
+                    if (this.isMissile) {
+                        createExplosion(this.x, this.y, 0xff8800, 1.5);
+                        
+                        // Damage enemies in radius
+                        damageEnemiesInRadius(this.x, this.y, explosionRadius, this.damage);
+                    }
+                } catch (error) {
+                    console.error('Error in projectile.die:', error);
+                }
+            }
+        }
+
+        // Enemy class
+        class Enemy {
+            constructor(scene, x, y, shape, color, type) {
+                try {
+                    this.scene = scene;
+                    this.x = x;
+                    this.y = y;
+                    this.shape = shape;
+                    this.color = color;
+                    this.type = type; // normal, fast, shooter, boss
+                    this.width = type === 'boss' ? 50 : 30;
+                    this.height = type === 'boss' ? 50 : 30;
+                    this.health = type === 'boss' ? 300 : 50;
+                    this.maxHealth = this.health;
+                    this.graphics = scene.add.graphics({ willReadFrequently: true });
+                    this.active = true;
+                    this.state = 'entering'; // entering, formation, attacking, returning
+                    this.formationX = 0;
+                    this.formationY = 0;
+                    this.speed = type === 'fast' ? 200 : 150;
+                    this.attackTimer = Math.random() * 5 + 5;
+                    this.fireTimer = 0;
+                    this.fireRate = type === 'shooter' ? 1 : 2;
+                    this.value = type === 'boss' ? 500 : 100;
+                    this.capturing = false;
+                    this.captureTarget = null;
+                    this.tractorBeam = null;
+                    
+                    // Draw initial shape
+                    this.drawShape();
+                } catch (error) {
+                    console.error('Error initializing enemy:', error);
+                }
+            }
+            
+            update(deltaTime) {
+                try {
+                    // Update based on current state
+                    if (this.state === 'entering') {
+                        this.updateEntering(deltaTime);
+                    } else if (this.state === 'formation') {
+                        this.updateFormation(deltaTime);
+                    } else if (this.state === 'attacking') {
+                        this.updateAttacking(deltaTime);
+                    } else if (this.state === 'returning') {
+                        this.updateReturning(deltaTime);
+                    } else if (this.state === 'capturing') {
+                        this.updateCapturing(deltaTime);
+                    }
+                    
+                    // Update fire timer for shooter enemies
+                    if ((this.type === 'shooter' || this.type === 'boss') && this.state === 'formation') {
+                        this.fireTimer -= deltaTime;
+                        if (this.fireTimer <= 0) {
+                            this.fire();
+                            this.fireTimer = this.fireRate;
+                        }
+                    }
+                    
+                    // Update graphics
+                    this.drawShape();
+                } catch (error) {
+                    console.error('Error updating enemy:', error);
+                }
+            }
+            
+            updateEntering(deltaTime) {
+                try {
+                    // Move towards formation position
+                    const dx = this.formationX - this.x;
+                    const dy = this.formationY - this.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance < 5) {
+                        // Reached formation position
+                        this.x = this.formationX;
+                        this.y = this.formationY;
+                        this.state = 'formation';
+                    } else {
+                        // Move towards formation position
+                        const speed = this.speed;
+                        const vx = dx / distance * speed;
+                        const vy = dy / distance * speed;
+                        
+                        this.x += vx * deltaTime;
+                        this.y += vy * deltaTime;
+                    }
+                } catch (error) {
+                    console.error('Error in enemy.updateEntering:', error);
+                }
+            }
+            
+            updateFormation(deltaTime) {
+                try {
+                    // Small random movement in formation
+                    this.x += Math.sin(Date.now() / 1000) * deltaTime * 10;
+                    
+                    // Decrease attack timer
+                    this.attackTimer -= deltaTime;
+                    if (this.attackTimer <= 0) {
+                        // Start attack if not a boss or if boss and no capture in progress
+                        if (this.type !== 'boss' || (this.type === 'boss' && !capturedShip)) {
+                            this.state = 'attacking';
+                            
+                            // Boss enemies might try to capture the player
+                            if (this.type === 'boss' && Math.random() < 0.3) {
+                                this.state = 'capturing';
+                                this.captureTarget = { x: player.x, y: player.y };
+                                this.capturing = true;
+                                
+                                // Create tractor beam graphics
+                                this.tractorBeam = this.scene.add.graphics();
+                            }
+                        } else {
+                            // Reset attack timer
+                            this.attackTimer = Math.random() * 5 + 5;
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error in enemy.updateFormation:', error);
+                }
+            }
+            
+            updateAttacking(deltaTime) {
+                try {
+                    // Move towards player
+                    const dx = player.x - this.x;
+                    const dy = (game.config.height - 50) - this.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance < 5 || this.y > game.config.height) {
+                        // Reached bottom of screen or close to player, return to formation
+                        this.state = 'returning';
+                    } else {
+                        // Move towards player
+                        const speed = this.speed * 1.5;
+                        const vx = dx / distance * speed;
+                        const vy = dy / distance * speed;
+                        
+                        this.x += vx * deltaTime;
+                        this.y += vy * deltaTime;
+                    }
+                } catch (error) {
+                    console.error('Error in enemy.updateAttacking:', error);
+                }
+            }
+            
+            updateReturning(deltaTime) {
+                try {
+                    // Move back to formation position
+                    const dx = this.formationX - this.x;
+                    const dy = this.formationY - this.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance < 5) {
+                        // Reached formation position
+                        this.x = this.formationX;
+                        this.y = this.formationY;
+                        this.state = 'formation';
+                        this.attackTimer = Math.random() * 5 + 5;
+                    } else {
+                        // Move towards formation position
+                        const speed = this.speed * 1.2;
+                        const vx = dx / distance * speed;
+                        const vy = dy / distance * speed;
+                        
+                        this.x += vx * deltaTime;
+                        this.y += vy * deltaTime;
+                    }
+                } catch (error) {
+                    console.error('Error in enemy.updateReturning:', error);
+                }
+            }
+            
+            updateCapturing(deltaTime) {
+                try {
+                    if (!this.captureTarget) {
+                        this.state = 'returning';
+                        return;
+                    }
+                    
+                    // Move towards capture target
+                    const dx = this.captureTarget.x - this.x;
+                    const dy = this.captureTarget.y - this.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance < 50) {
+                        // Close enough to attempt capture
+                        if (!capturedShip && !playerInvulnerable) {
+                            // Capture player ship
+                            capturedShip = {
+                                x: this.x,
+                                y: this.y - 30,
+                                shape: player.shape,
+                                color: player.color
+                            };
+                            
+                            // Damage player
+                            player.takeDamage(50);
+                            
+                            // Create tractor beam
+                            tractor = this.scene.add.graphics();
+                        }
+                        
+                        // Return to formation
+                        this.state = 'returning';
+                        this.capturing = false;
+                        
+                        // Destroy tractor beam
+                        if (this.tractorBeam) {
+                            this.tractorBeam.destroy();
+                            this.tractorBeam = null;
+                        }
+                    } else {
+                        // Move towards capture target
+                        const speed = this.speed * 1.2;
+                        const vx = dx / distance * speed;
+                        const vy = dy / distance * speed;
+                        
+                        this.x += vx * deltaTime;
+                        this.y += vy * deltaTime;
+                        
+                        // Update tractor beam
+                        if (this.tractorBeam) {
+                            this.tractorBeam.clear();
+                            this.tractorBeam.lineStyle(2, 0x00ffff, 0.8);
+                            this.tractorBeam.lineBetween(this.x, this.y, this.captureTarget.x, this.captureTarget.y);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error in enemy.updateCapturing:', error);
+                }
+            }
+            
+            drawShape() {
+                try {
+                    // Clear previous graphics
+                    if (this.graphics) {
+                        this.graphics.clear();
+                    }
+                    
+                    // Set fill style
+                    this.graphics.fillStyle(this.color, 1);
+                    
+                    // Draw shape based on type
+                    if (this.shape === 'triangle') {
+                        // Draw triangle
+                        this.graphics.fillTriangle(
+                            this.x, this.y + this.height / 2,
+                            this.x - this.width / 2, this.y - this.height / 2,
+                            this.x + this.width / 2, this.y - this.height / 2
+                        );
+                    } else if (this.shape === 'square') {
+                        // Draw square
+                        this.graphics.fillRect(
+                            this.x - this.width / 2,
+                            this.y - this.height / 2,
+                            this.width,
+                            this.height
+                        );
+                    } else if (this.shape === 'circle') {
+                        // Draw circle
+                        this.graphics.fillCircle(
+                            this.x,
+                            this.y,
+                            this.width / 2
+                        );
+                    }
+                    
+                    // Draw health bar for boss enemies
+                    if (this.type === 'boss') {
+                        const healthPercent = this.health / this.maxHealth;
+                        const barWidth = this.width;
+                        const barHeight = 5;
+                        
+                        // Background
+                        this.graphics.fillStyle(0x333333, 1);
+                        this.graphics.fillRect(
+                            this.x - barWidth / 2,
+                            this.y - this.height / 2 - 10,
+                            barWidth,
+                            barHeight
+                        );
+                        
+                        // Health
+                        this.graphics.fillStyle(0xff0000, 1);
+                        this.graphics.fillRect(
+                            this.x - barWidth / 2,
+                            this.y - this.height / 2 - 10,
+                            barWidth * healthPercent,
+                            barHeight
+                        );
+                    }
+                    
+                    // Draw captured ship if this enemy has one
+                    if (capturedShip && this.type === 'boss') {
+                        capturedShip.x = this.x;
+                        capturedShip.y = this.y - 30;
+                        
+                        // Draw captured ship
+                        if (capturedShip.shape === 'triangle') {
+                            this.graphics.fillStyle(capturedShip.color, 1);
+                            this.graphics.fillTriangle(
+                                capturedShip.x, capturedShip.y - 15,
+                                capturedShip.x - 15, capturedShip.y + 15,
+                                capturedShip.x + 15, capturedShip.y + 15
+                            );
+                        }
+                        
+                        // Draw tractor beam
+                        if (tractor) {
+                            tractor.clear();
+                            tractor.lineStyle(2, 0x00ffff, 0.5);
+                            tractor.lineBetween(this.x, this.y - this.height / 2, capturedShip.x, capturedShip.y + 15);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error drawing enemy shape:', error);
+                }
+            }
+            
+            fire() {
+                try {
+                    // Create enemy projectile
+                    const projectile = new Projectile(
+                        this.scene,
+                        this.x,
+                        this.y + this.height / 2,
+                        0,
+                        300,
+                        this.shape,
+                        0xff0000,
+                        false
+                    );
+                    
+                    projectiles.push(projectile);
+                } catch (error) {
+                    console.error('Error in enemy.fire:', error);
+                }
+            }
+            
+            takeDamage(amount) {
+                try {
+                    // Reduce health
+                    this.health -= amount;
+                    
+                    // Check if enemy is destroyed
+                    if (this.health <= 0) {
+                        this.die();
+                    }
+                } catch (error) {
+                    console.error('Error in enemy.takeDamage:', error);
+                }
+            }
+            
+            die() {
+                try {
+                    // Create explosion
+                    createExplosion(this.x, this.y, this.color, 1);
+                    
+                    // Add score
+                    score += this.value;
+                    updateScoreText();
+                    
+                    // Remove from active enemies
+                    this.active = false;
+                    
+                    // Destroy graphics
+                    if (this.graphics) {
+                        this.graphics.destroy();
+                    }
+                    
+                    // Destroy tractor beam if capturing
+                    if (this.tractorBeam) {
+                        this.tractorBeam.destroy();
+                    }
+                    
+                    // Release captured ship if this is a boss
+                    if (this.type === 'boss' && capturedShip) {
+                        // Create power-up at captured ship position
+                        createPowerUp(capturedShip.x, capturedShip.y, 'dual');
+                        
+                        // Clear captured ship
+                        capturedShip = null;
+                        
+                        // Destroy tractor beam
+                        if (tractor) {
+                            tractor.destroy();
+                            tractor = null;
+                        }
+                    }
+                    
+                    // Random chance to drop power-up
+                    if (Math.random() < 0.1) {
+                        const powerUpTypes = ['health', 'missile', 'speed'];
+                        const type = powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)];
+                        createPowerUp(this.x, this.y, type);
+                    }
+                    
+                    // Check if wave is completed
+                    checkWaveCompletion();
+                } catch (error) {
+                    console.error('Error in enemy.die:', error);
+                }
+            }
+        }
+
+        // Power-up class
+        class PowerUp {
+            constructor(scene, x, y, type) {
+                try {
+                    this.scene = scene;
+                    this.x = x;
+                    this.y = y;
+                    this.type = type; // health, missile, speed, dual
+                    this.width = 20;
+                    this.height = 20;
+                    this.graphics = scene.add.graphics();
+                    this.active = true;
+                    this.vy = 100;
+                    this.rotationSpeed = Math.random() * 2 - 1;
+                    this.rotation = 0;
+                    
+                    // Set color based on type
+                    if (type === 'health') {
+                        this.color = 0xff0000;
+                    } else if (type === 'missile') {
+                        this.color = 0xff8800;
+                    } else if (type === 'speed') {
+                        this.color = 0x00ff00;
+                    } else if (type === 'dual') {
+                        this.color = 0xffff00;
+                    }
+                    
+                    // Draw initial shape
+                    this.drawShape();
+                } catch (error) {
+                    console.error('Error initializing power-up:', error);
+                }
+            }
+            
+            update(deltaTime) {
+                try {
+                    // Move power-up down
+                    this.y += this.vy * deltaTime;
+                    
+                    // Rotate power-up
+                    this.rotation += this.rotationSpeed * deltaTime;
+                    
+                    // Check if power-up is off screen
+                    if (this.y > game.config.height) {
+                        this.die();
+                        return;
+                    }
+                    
+                    // Check collision with player
+                    if (
+                        this.x > player.x - player.width / 2 - this.width / 2 &&
+                        this.x < player.x + player.width / 2 + this.width / 2 &&
+                        this.y > player.y - player.height / 2 - this.height / 2 &&
+                        this.y < player.y + player.height / 2 + this.height / 2
+                    ) {
+                        this.collect();
+                        return;
+                    }
+                    
+                    // Update graphics
+                    this.drawShape();
+                } catch (error) {
+                    console.error('Error updating power-up:', error);
+                }
+            }
+            
+            drawShape() {
+                try {
+                    // Clear previous graphics
+                    if (this.graphics) {
+                        this.graphics.clear();
+                    }
+                    
+                    // Set fill style
+                    this.graphics.fillStyle(this.color, 1);
+                    
+                    // Save current position
+                    const x = this.x;
+                    const y = this.y;
+                    
+                    // Draw shape based on type
+                    if (this.type === 'health') {
+                        // Draw health cross
+                        this.graphics.fillRect(x - 2, y - 8, 4, 16);
+                        this.graphics.fillRect(x - 8, y - 2, 16, 4);
+                    } else if (this.type === 'missile') {
+                        // Draw missile icon
+                        this.graphics.fillTriangle(
+                            x, y - 8,
+                            x - 4, y,
+                            x + 4, y
+                        );
+                        this.graphics.fillRect(x - 2, y, 4, 8);
+                    } else if (this.type === 'speed') {
+                        // Draw speed arrow
+                        this.graphics.fillTriangle(
+                            x + 8, y,
+                            x - 4, y - 6,
+                            x - 4, y + 6
+                        );
+                        this.graphics.fillRect(x - 8, y - 2, 8, 4);
+                    } else if (this.type === 'dual') {
+                        // Draw dual fighter icon
+                        this.graphics.fillTriangle(
+                            x - 5, y - 8,
+                            x - 9, y,
+                            x - 1, y
+                        );
+                        this.graphics.fillTriangle(
+                            x + 5, y - 8,
+                            x + 1, y,
+                            x + 9, y
+                        );
+                    }
+                    
+                    // Draw pulsing outline
+                    const pulseScale = 1 + Math.sin(Date.now() / 200) * 0.2;
+                    this.graphics.lineStyle(2, this.color, 0.5);
+                    this.graphics.strokeCircle(x, y, this.width / 2 * pulseScale);
+                } catch (error) {
+                    console.error('Error drawing power-up:', error);
+                }
+            }
+            
+            collect() {
+                try {
+                    // Apply power-up effect
+                    if (this.type === 'health') {
+                        // Restore health
+                        player.health = Math.min(player.health + 50, player.maxHealth);
+                    } else if (this.type === 'missile') {
+                        // Add missiles (up to max)
+                        missiles = Math.min(missiles + 1, MAX_MISSILES);
+                        updateMissilesText();
+                    } else if (this.type === 'speed') {
+                        // Increase player speed
+                        player.speed += 50;
+                    } else if (this.type === 'dual') {
+                        // Activate dual fighter
+                        player.dual = true;
+                    }
+                    
+                    // Create collection effect
+                    createExplosion(this.x, this.y, this.color, 0.5);
+                    
+                    // Die
+                    this.die();
+                } catch (error) {
+                    console.error('Error collecting power-up:', error);
+                }
+            }
+            
+            die() {
+                try {
+                    // Remove from active power-ups
+                    this.active = false;
+                    
+                    // Destroy graphics
+                    if (this.graphics) {
+                        this.graphics.destroy();
+                    }
+                } catch (error) {
+                    console.error('Error in power-up.die:', error);
+                }
+            }
+        }
+
+        // Create UI elements
+        function createUI(scene) {
+            try {
+                // Score text
+                scoreText = scene.add.text(
+                    20,
+                    20,
+                    'Score: 0',
+                    {
+                        font: '24px Arial',
+                        fill: '#ffffff'
+                    }
+                );
+                
+                // Wave text
+                waveText = scene.add.text(
+                    game.config.width / 2,
+                    20,
+                    'Wave 1',
+                    {
+                        font: '24px Arial',
+                        fill: '#ffffff'
+                    }
+                ).setOrigin(0.5, 0);
+                
+                // Lives text
+                livesText = scene.add.text(
+                    game.config.width - 20,
+                    20,
+                    'Lives: 3',
+                    {
+                        font: '24px Arial',
+                        fill: '#ffffff'
+                    }
+                ).setOrigin(1, 0);
+                
+                // Missiles text
+                missilesText = scene.add.text(
+                    game.config.width - 20,
+                    50,
+                    'Missiles: 3',
+                    {
+                        font: '24px Arial',
+                        fill: '#ffffff'
+                    }
+                ).setOrigin(1, 0);
+            } catch (error) {
+                console.error('Error creating UI:', error);
+            }
+        }
+
+        // Update score text
+        function updateScoreText() {
+            try {
+                if (scoreText) {
+                    scoreText.setText('Score: ' + score);
+                }
+            } catch (error) {
+                console.error('Error updating score text:', error);
+            }
+        }
+
+        // Update wave text
+        function updateWaveText() {
+            try {
+                if (waveText) {
+                    waveText.setText('Wave ' + wave);
+                }
+            } catch (error) {
+                console.error('Error updating wave text:', error);
+            }
+        }
+
+        // Update lives text
+        function updateLivesText() {
+            try {
+                if (livesText) {
+                    livesText.setText('Lives: ' + lives);
+                }
+            } catch (error) {
+                console.error('Error updating lives text:', error);
+            }
+        }
+
+        // Update missiles text
+        function updateMissilesText() {
+            try {
+                if (missilesText) {
+                    missilesText.setText('Missiles: ' + missiles);
+                }
+            } catch (error) {
+                console.error('Error updating missiles text:', error);
+            }
+        }
+
+        // Set up input handlers
+        function setupInputHandlers(scene) {
+            try {
+                // Mouse movement
+                scene.input.on('pointermove', function (pointer) {
+                    if (player) {
+                        player.targetX = pointer.x;
+                    }
+                });
+                
+                // Mouse down
+                scene.input.on('pointerdown', function (pointer) {
+                    if (pointer.button === 0) {
+                        // Left click
+                        mouseDown = true;
+                    } else if (pointer.button === 2) {
+                        // Right click
+                        rightMouseDown = true;
+                        
+                        // Fire missile if game is started
+                        if (gameStarted && !gameOver && player) {
+                            player.fireMissile();
+                        }
+                    }
+                });
+                
+                // Mouse up
+                scene.input.on('pointerup', function (pointer) {
+                    if (pointer.button === 0) {
+                        // Left click
+                        mouseDown = false;
+                    } else if (pointer.button === 2) {
+                        // Right click
+                        rightMouseDown = false;
+                    }
+                });
+                
+                // Prevent context menu on right click
+                scene.game.canvas.addEventListener('contextmenu', function (e) {
+                    e.preventDefault();
+                });
+            } catch (error) {
+                console.error('Error setting up input handlers:', error);
+            }
+        }
+
+        // Start a new wave
+        function startWave(scene) {
+            try {
+                console.log('Starting wave ' + wave);
+                
+                // Update wave text
+                updateWaveText();
+                
+                // Show wave announcement
+                const waveAnnouncement = scene.add.text(
+                    scene.cameras.main.width / 2,
+                    scene.cameras.main.height / 2,
+                    'WAVE ' + wave,
+                    {
+                        font: 'bold 48px Arial',
+                        fill: '#ffffff'
+                    }
+                ).setOrigin(0.5);
+                
+                // Fade out announcement
+                scene.tweens.add({
+                    targets: waveAnnouncement,
+                    alpha: 0,
+                    duration: 2000,
+                    onComplete: function () {
+                        waveAnnouncement.destroy();
+                    }
+                });
+                
+                // Add missiles for new wave (up to max)
+                missiles = Math.min(missiles + 3, MAX_MISSILES);
+                updateMissilesText();
+                
+                // Determine number of enemies based on wave
+                enemiesInWave = wave * 5;
+                
+                // Create formation positions
+                const formationWidth = Math.min(wave + 2, 8);
+                const formationHeight = Math.ceil(enemiesInWave / formationWidth);
+                const formationStartX = game.config.width / 2 - (formationWidth - 1) * 50 / 2;
+                const formationStartY = 100;
+                
+                // Create enemies
+                for (let i = 0; i < enemiesInWave; i++) {
+                    // Determine position in formation
+                    const formationX = formationStartX + (i % formationWidth) * 50;
+                    const formationY = formationStartY + Math.floor(i / formationWidth) * 50;
+                    
+                    // Determine enemy type
+                    let type = 'normal';
+                    if (Math.random() < 0.2) {
+                        type = 'fast';
+                    } else if (Math.random() < 0.3) {
+                        type = 'shooter';
+                    }
+                    
+                    // Add boss enemy in later waves
+                    if (wave >= 3 && i === 0 && Math.random() < 0.5) {
+                        type = 'boss';
+                    }
+                    
+                    // Determine shape and color
+                    const shapes = ['triangle', 'square', 'circle'];
+                    const shape = shapes[Math.floor(Math.random() * shapes.length)];
+                    
+                    let color;
+                    if (type === 'normal') {
+                        color = 0xff0000;
+                    } else if (type === 'fast') {
+                        color = 0xff8800;
+                    } else if (type === 'shooter') {
+                        color = 0xff00ff;
+                    } else if (type === 'boss') {
+                        color = 0xffff00;
+                    }
+                    
+                    // Create enemy off screen
+                    const enemy = new Enemy(
+                        scene,
+                        Math.random() * game.config.width,
+                        -50,
+                        shape,
+                        color,
+                        type
+                    );
+                    
+                    // Set formation position
+                    enemy.formationX = formationX;
+                    enemy.formationY = formationY;
+                    
+                    // Add to enemies array
+                    enemies.push(enemy);
+                }
+                
+                // Reset wave completion flag
+                waveCompleted = false;
+            } catch (error) {
+                console.error('Error starting wave:', error);
+            }
+        }
+
+        // Check if wave is completed
+        function checkWaveCompletion() {
+            try {
+                // Count active enemies
+                let activeEnemies = 0;
+                enemies.forEach(enemy => {
+                    if (enemy.active) {
+                        activeEnemies++;
+                    }
+                });
+                
+                // Check if all enemies are destroyed
+                if (activeEnemies === 0 && !waveCompleted) {
+                    waveCompleted = true;
+                    waveDelayTimer = waveDelay;
+                    
+                    console.log('Wave ' + wave + ' completed!');
+                }
+            } catch (error) {
+                console.error('Error checking wave completion:', error);
+            }
+        }
+
+        // Create explosion effect
+        function createExplosion(x, y, color, scale) {
+            try {
+                // Create explosion particles
+                const numParticles = 20;
+                
+                for (let i = 0; i < numParticles; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = Math.random() * 100 + 50;
+                    const size = Math.random() * 5 + 2;
+                    
+                    const particle = {
+                        x: x,
+                        y: y,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed,
+                        size: size * scale,
+                        color: color,
+                        alpha: 1,
+                        life: Math.random() * 0.5 + 0.5,
+                        graphics: game.scene.scenes[0].add.graphics()
+                    };
+                    
+                    particles.push(particle);
+                }
+            } catch (error) {
+                console.error('Error creating explosion:', error);
+            }
+        }
+
+        // Create power-up
+        function createPowerUp(x, y, type) {
+            try {
+                // Create power-up
+                const powerUp = new PowerUp(
+                    game.scene.scenes[0],
+                    x,
+                    y,
+                    type
+                );
+                
+                // Add to power-ups array
+                powerUps.push(powerUp);
+            } catch (error) {
+                console.error('Error creating power-up:', error);
+            }
+        }
+
+        // Damage enemies in radius (for missile explosion)
+        function damageEnemiesInRadius(x, y, radius, damage) {
+            try {
+                console.log(`Missile explosion at (${x}, ${y}) with radius ${radius} and damage ${damage}`);
+                
+                // Track how many enemies were hit
+                let enemiesHit = 0;
+                
+                // Check each enemy
+                enemies.forEach(enemy => {
+                    if (enemy.active) {
+                        // Calculate distance to explosion
+                        const dx = enemy.x - x;
+                        const dy = enemy.y - y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+                        
+                        // Damage enemy if within radius
+                        if (distance <= radius) {
+                            // Damage falls off with distance
+                            const damageMultiplier = 1 - (distance / radius);
+                            const actualDamage = damage * damageMultiplier;
+                            
+                            enemy.takeDamage(actualDamage);
+                            enemiesHit++;
+                            
+                            // Create hit effect on enemy
+                            createExplosion(enemy.x, enemy.y, 0xff4400, 0.5);
+                        }
+                    }
+                });
+                
+                console.log(`Missile hit ${enemiesHit} enemies`);
+                
+                // Create visual effect for explosion radius
+                const radiusGraphics = game.scene.scenes[0].add.graphics({ willReadFrequently: true });
+                radiusGraphics.fillStyle(0xff8800, 0.3);
+                radiusGraphics.fillCircle(x, y, radius);
+                
+                // Add pulsing ring effect
+                const ringGraphics = game.scene.scenes[0].add.graphics({ willReadFrequently: true });
+                ringGraphics.lineStyle(3, 0xffff00, 1);
+                ringGraphics.strokeCircle(x, y, radius * 0.8);
+                
+                // Fade out and destroy
+                game.scene.scenes[0].tweens.add({
+                    targets: [radiusGraphics, ringGraphics],
+                    alpha: 0,
+                    duration: 500,
+                    onComplete: function () {
+                        radiusGraphics.destroy();
+                        ringGraphics.destroy();
+                    }
+                });
+            } catch (error) {
+                console.error('Error damaging enemies in radius:', error);
+            }
+        }
+
+        // Update game state
+        function updateGame(scene, deltaTime) {
+            try {
+                // Update player
+                if (player) {
+                    player.update(deltaTime);
+                }
+                
+                // Update projectiles
+                for (let i = projectiles.length - 1; i >= 0; i--) {
+                    if (projectiles[i].active) {
+                        projectiles[i].update(deltaTime);
+                    } else {
+                        projectiles.splice(i, 1);
+                    }
+                }
+                
+                // Update enemies
+                for (let i = enemies.length - 1; i >= 0; i--) {
+                    if (enemies[i].active) {
+                        enemies[i].update(deltaTime);
+                        
+                        // Check collision with player projectiles
+                        for (let j = 0; j < projectiles.length; j++) {
+                            const projectile = projectiles[j];
+                            
+                            // Skip enemy projectiles
+                            if (projectile.vy > 0) continue;
+                            
+                            // Check collision
+                            if (
+                                projectile.active &&
+                                projectile.x > enemies[i].x - enemies[i].width / 2 &&
+                                projectile.x < enemies[i].x + enemies[i].width / 2 &&
+                                projectile.y > enemies[i].y - enemies[i].height / 2 &&
+                                projectile.y < enemies[i].y + enemies[i].height / 2
+                            ) {
+                                // Damage enemy
+                                enemies[i].takeDamage(projectile.damage);
+                                
+                                // Destroy projectile if not a missile (missiles explode on contact)
+                                if (!projectile.isMissile) {
+                                    projectile.die();
+                                }
+                            }
+                        }
+                        
+                        // Check collision with player
+                        if (
+                            !playerInvulnerable &&
+                            enemies[i].x > player.x - player.width / 2 - enemies[i].width / 2 &&
+                            enemies[i].x < player.x + player.width / 2 + enemies[i].width / 2 &&
+                            enemies[i].y > player.y - player.height / 2 - enemies[i].height / 2 &&
+                            enemies[i].y < player.y + player.height / 2 + enemies[i].height / 2
+                        ) {
+                            // Damage player
+                            player.takeDamage(50);
+                            
+                            // Damage enemy
+                            enemies[i].takeDamage(50);
+                        }
+                    } else {
+                        enemies.splice(i, 1);
+                    }
+                }
+                
+                // Update player projectiles
+                for (let i = projectiles.length - 1; i >= 0; i--) {
+                    const projectile = projectiles[i];
+                    
+                    // Skip player projectiles
+                    if (projectile.vy < 0) continue;
+                    
+                    // Check collision with player
+                    if (
+                        projectile.active &&
+                        !playerInvulnerable &&
+                        projectile.x > player.x - player.width / 2 &&
+                        projectile.x < player.x + player.width / 2 &&
+                        projectile.y > player.y - player.height / 2 &&
+                        projectile.y < player.y + player.height / 2
+                    ) {
+                        // Damage player
+                        player.takeDamage(20);
+                        
+                        // Destroy projectile
+                        projectile.die();
+                    }
+                }
+                
+                // Update particles
+                for (let i = particles.length - 1; i >= 0; i--) {
+                    const particle = particles[i];
+                    
+                    // Update position
+                    particle.x += particle.vx * deltaTime;
+                    particle.y += particle.vy * deltaTime;
+                    
+                    // Update life
+                    particle.life -= deltaTime;
+                    particle.alpha = particle.life;
+                    
+                    // Draw particle
+                    particle.graphics.clear();
+                    particle.graphics.fillStyle(particle.color, particle.alpha);
+                    particle.graphics.fillCircle(particle.x, particle.y, particle.size);
+                    
+                    // Remove if dead
+                    if (particle.life <= 0) {
+                        particle.graphics.destroy();
+                        particles.splice(i, 1);
+                    }
+                }
+                
+                // Update power-ups
+                for (let i = powerUps.length - 1; i >= 0; i--) {
+                    if (powerUps[i].active) {
+                        powerUps[i].update(deltaTime);
+                    } else {
+                        powerUps.splice(i, 1);
+                    }
+                }
+                
+                // Update player invulnerability
+                if (playerInvulnerable) {
+                    playerInvulnerabilityTimer -= deltaTime;
+                    if (playerInvulnerabilityTimer <= 0) {
+                        playerInvulnerable = false;
+                    }
+                }
+                
+                // Check wave completion
+                if (waveCompleted) {
+                    waveDelayTimer -= deltaTime * 1000;
+                    if (waveDelayTimer <= 0) {
+                        // Start next wave
+                        wave++;
+                        startWave(scene);
+                    }
+                }
+                
+                // Update stars
+                updateStars(deltaTime);
+            } catch (error) {
+                console.error('Error in updateGame:', error);
+            }
+        }
+
+        // End game
+        function endGame() {
+            try {
+                gameOver = true;
+                
+                // Create game over text
+                gameOverText = game.scene.scenes[0].add.text(
+                    game.config.width / 2,
+                    game.config.height / 3,
+                    'GAME OVER',
+                    {
+                        font: 'bold 48px Arial',
+                        fill: '#ffffff'
+                    }
+                ).setOrigin(0.5);
+                
+                // Create final score text
+                const finalScoreText = game.scene.scenes[0].add.text(
+                    game.config.width / 2,
+                    game.config.height / 2,
+                    'Final Score: ' + score,
+                    {
+                        font: '32px Arial',
+                        fill: '#ffffff'
+                    }
+                ).setOrigin(0.5);
+                
+                // Create restart button
+                const buttonWidth = 200;
+                const buttonHeight = 60;
+                const buttonX = game.config.width / 2 - buttonWidth / 2;
+                const buttonY = game.config.height / 2 + 50;
+                
+                // Button background
+                const buttonBackground = game.scene.scenes[0].add.graphics();
+                buttonBackground.fillStyle(0x333333, 1);
+                buttonBackground.fillRect(buttonX, buttonY, buttonWidth, buttonHeight);
+                buttonBackground.lineStyle(2, 0xffffff, 1);
+                buttonBackground.strokeRect(buttonX, buttonY, buttonWidth, buttonHeight);
+                
+                // Button text
+                const restartText = game.scene.scenes[0].add.text(
+                    game.config.width / 2,
+                    game.config.height / 2 + 50 + buttonHeight / 2,
+                    'RESTART',
+                    {
+                        font: 'bold 24px Arial',
+                        fill: '#ffffff'
+                    }
+                ).setOrigin(0.5);
+                
+                // Make button interactive
+                buttonBackground.setInteractive(
+                    new Phaser.Geom.Rectangle(buttonX, buttonY, buttonWidth, buttonHeight),
+                    Phaser.Geom.Rectangle.Contains
+                );
+                
+                // Button click handler
+                buttonBackground.on('pointerdown', function() {
+                    // Reload page to restart game
+                    window.location.reload();
+                });
+                
+                // Store button reference
+                restartButton = {
+                    background: buttonBackground,
+                    text: restartText
+                };
+            } catch (error) {
+                console.error('Error in endGame:', error);
+            }
+        }
+    </script>
+</body>
+</html>
